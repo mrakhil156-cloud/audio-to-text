@@ -1,17 +1,10 @@
 ﻿import os
-import re
-import subprocess
 import tempfile
 from pathlib import Path
 
 import streamlit as st
 from faster_whisper import WhisperModel
 
-
-# ============================================================
-# AUDIO TO TEXT
-# Generic transcription
-# ============================================================
 
 st.set_page_config(
     page_title="Audio to Text",
@@ -53,10 +46,6 @@ LANGUAGES = {
 }
 
 
-# ============================================================
-# MODEL
-# ============================================================
-
 @st.cache_resource
 def load_model(model_name):
 
@@ -72,77 +61,105 @@ def load_model(model_name):
     )
 
 
-# ============================================================
-# AUDIO CONVERSION
-# ============================================================
+def transcribe_audio(
+    uploaded_file,
+    model_name,
+    language_code
+):
 
-def convert_audio(input_file):
+    suffix = Path(
+        uploaded_file.name
+    ).suffix.lower()
 
-    output_file = tempfile.NamedTemporaryFile(
+    temporary_file = tempfile.NamedTemporaryFile(
         delete=False,
-        suffix=".wav"
-    ).name
-
-    command = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        input_file,
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-sample_fmt",
-        "s16",
-        output_file
-    ]
-
-    result = subprocess.run(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
+        suffix=suffix
     )
 
-    if result.returncode != 0:
+    try:
 
-        raise RuntimeError(
-            "Audio conversion failed:\n\n"
-            + result.stderr[-4000:]
+        temporary_file.write(
+            uploaded_file.getbuffer()
         )
 
-    return output_file
+        temporary_file.close()
 
+        model = load_model(
+            model_name
+        )
 
-# ============================================================
-# TEXT CLEANING
-# ============================================================
+        segments, info = model.transcribe(
 
-def normalize_whitespace(text):
+            temporary_file.name,
 
-    # Only normalize accidental spaces.
-    # Do NOT remove repeated words.
-    # Do NOT correct words.
-    # Do NOT rewrite speech.
+            language=language_code,
 
-    text = text.replace(
-        "\r\n",
-        "\n"
-    )
+            task="transcribe",
 
-    text = re.sub(
-        r"[ \t]+",
-        " ",
-        text
-    )
+            initial_prompt=None,
 
-    return text.strip()
+            beam_size=5,
 
+            best_of=1,
 
-# ============================================================
-# PAGE STYLE
-# ============================================================
+            temperature=0,
+
+            condition_on_previous_text=False,
+
+            compression_ratio_threshold=2.4,
+
+            log_prob_threshold=-1.0,
+
+            no_speech_threshold=0.60,
+
+            vad_filter=True,
+
+            vad_parameters={
+                "min_silence_duration_ms": 500,
+                "speech_pad_ms": 250
+            },
+
+            word_timestamps=False
+        )
+
+        lines = []
+
+        for segment in segments:
+
+            text = segment.text.strip()
+
+            if text:
+
+                lines.append(text)
+
+        transcript = "\n".join(
+            lines
+        ).strip()
+
+        if not transcript:
+
+            transcript = (
+                "[No intelligible speech detected.]"
+            )
+
+        return (
+            transcript,
+            info.language,
+            info.language_probability
+        )
+
+    finally:
+
+        try:
+
+            os.remove(
+                temporary_file.name
+            )
+
+        except Exception:
+
+            pass
+
 
 st.markdown(
     """
@@ -160,29 +177,11 @@ st.markdown(
         margin-bottom: 25px;
     }
 
-    .info-box {
-        padding: 14px;
-        border-radius: 10px;
-        background: #eff6ff;
-        border: 1px solid #93c5fd;
-    }
-
-    .warning-box {
-        padding: 14px;
-        border-radius: 10px;
-        background: #fff7ed;
-        border: 1px solid #fdba74;
-    }
-
     </style>
     """,
     unsafe_allow_html=True
 )
 
-
-# ============================================================
-# HEADER
-# ============================================================
 
 st.markdown(
     '<div class="title">🎙️ Audio to Text</div>',
@@ -191,20 +190,15 @@ st.markdown(
 
 st.markdown(
     '<div class="subtitle">'
-    'Transcribe spoken audio into readable text'
+    'Whatever is spoken in the audio → text'
     '</div>',
     unsafe_allow_html=True
 )
 
 
-# ============================================================
-# SIDEBAR
-# ============================================================
-
 with st.sidebar:
 
     st.header("Transcription Settings")
-
 
     model_name = st.selectbox(
         "Whisper Model",
@@ -215,102 +209,49 @@ with st.sidebar:
         index=0
     )
 
-
     language_name = st.selectbox(
         "Audio Language",
         list(LANGUAGES.keys()),
         index=0
     )
 
-
     st.divider()
 
-
-    st.markdown(
-        """
-        **Recommended**
-
-        Sinhala audio:
-        `Sinhala`
-
-        Sinhala + English:
-        `Auto Detect`
-
-        English:
-        `English`
-        """
+    st.write(
+        "The application does not translate, "
+        "summarize, or add medical terminology."
     )
 
-
-    st.divider()
-
-
-    st.caption(
-        "CPU mode is used for Windows laptops."
-    )
-
-
-# ============================================================
-# UPLOAD
-# ============================================================
 
 st.header("1. Upload Audio")
 
 
 uploaded_file = st.file_uploader(
     "Choose an audio file",
-    type=SUPPORTED_FORMATS,
-    accept_multiple_files=False
+    type=SUPPORTED_FORMATS
 )
 
 
 if uploaded_file is None:
 
-    st.markdown(
-        """
-        <div class="info-box">
-
-        Upload an audio recording and the application
-        will transcribe the speech into text.
-
-        </div>
-        """,
-        unsafe_allow_html=True
+    st.info(
+        "Upload an audio recording to begin."
     )
 
     st.stop()
 
 
-# ============================================================
-# FILE INFORMATION
-# ============================================================
-
-extension = Path(
-    uploaded_file.name
-).suffix.lower()
-
-
-file_size_mb = (
-    uploaded_file.size
-    / 1024
-    / 1024
-)
-
-
 st.success(
-    f"File: {uploaded_file.name}"
+    f"Uploaded: {uploaded_file.name}"
 )
+
 
 st.caption(
-    f"Size: {file_size_mb:.2f} MB"
+    f"Size: {uploaded_file.size / 1024 / 1024:.2f} MB"
 )
 
 
-# ============================================================
-# AUDIO PLAYER
-# ============================================================
-
-st.header("2. Listen to Audio")
+st.header("2. Listen")
 
 
 st.audio(
@@ -318,11 +259,7 @@ st.audio(
 )
 
 
-# ============================================================
-# TRANSCRIPTION
-# ============================================================
-
-st.header("3. Convert Audio to Text")
+st.header("3. Transcribe")
 
 
 if st.button(
@@ -331,218 +268,50 @@ if st.button(
     use_container_width=True
 ):
 
-    original_file = None
-    wav_file = None
-
+    language_code = LANGUAGES[
+        language_name
+    ]
 
     try:
 
-        # ----------------------------------------------------
-        # Save uploaded audio
-        # ----------------------------------------------------
-
-        with tempfile.NamedTemporaryFile(
-            delete=False,
-            suffix=extension
-        ) as temporary:
-
-            temporary.write(
-                uploaded_file.getbuffer()
-            )
-
-            original_file = temporary.name
-
-
-        # ----------------------------------------------------
-        # Convert audio
-        # ----------------------------------------------------
-
-        with st.status(
-            "Preparing audio...",
-            expanded=False
+        with st.spinner(
+            "Loading transcription model..."
         ):
 
-            wav_file = convert_audio(
-                original_file
-            )
+            with st.spinner(
+                "Transcribing audio..."
+            ):
 
-
-        # ----------------------------------------------------
-        # Load Whisper
-        # ----------------------------------------------------
-
-        with st.status(
-            f"Loading {model_name} model...",
-            expanded=False
-        ):
-
-            model = load_model(
-                model_name
-            )
-
-
-        # ----------------------------------------------------
-        # Selected language
-        # ----------------------------------------------------
-
-        language_code = LANGUAGES[
-            language_name
-        ]
-
-
-        # ----------------------------------------------------
-        # TRANSCRIPTION
-        # ----------------------------------------------------
-
-        with st.status(
-            "Transcribing audio...",
-            expanded=True
-        ):
-
-            segments, info = model.transcribe(
-
-                wav_file,
-
-                language=language_code,
-
-                task="transcribe",
-
-                # No medical prompt.
-                # No forced vocabulary.
-                initial_prompt=None,
-
-                beam_size=5,
-
-                best_of=1,
-
-                temperature=0,
-
-                # Prevent previous hallucinated text
-                # from influencing the next segment.
-                condition_on_previous_text=False,
-
-                compression_ratio_threshold=2.4,
-
-                log_prob_threshold=-1.0,
-
-                no_speech_threshold=0.60,
-
-                vad_filter=True,
-
-                vad_parameters={
-                    "min_silence_duration_ms": 500,
-                    "speech_pad_ms": 250
-                },
-
-                word_timestamps=False
-            )
-
-
-            transcript_lines = []
-
-            uncertain_segments = []
-
-
-            for segment in segments:
-
-                text = normalize_whitespace(
-                    segment.text
+                (
+                    transcript,
+                    detected_language,
+                    language_probability
+                ) = transcribe_audio(
+                    uploaded_file,
+                    model_name,
+                    language_code
                 )
 
-
-                if not text:
-                    continue
-
-
-                # ------------------------------------------------
-                # IMPORTANT:
-                # DO NOT remove repetitions.
-                # If speaker says:
-                # "yes yes yes"
-                # it stays:
-                # "yes yes yes"
-                # ------------------------------------------------
-
-
-                confidence = segment.avg_logprob
-
-
-                if confidence < -1.3:
-
-                    uncertain_segments.append(
-                        text
-                    )
-
-                    transcript_lines.append(
-                        "[uncertain] " + text
-                    )
-
-                else:
-
-                    transcript_lines.append(
-                        text
-                    )
-
-
-        transcript = "\n".join(
-            transcript_lines
-        ).strip()
-
-
-        if not transcript:
-
-            transcript = (
-                "[No intelligible speech detected.]"
-            )
-
-
-        # ----------------------------------------------------
-        # Store result
-        # ----------------------------------------------------
 
         st.session_state[
             "transcript"
         ] = transcript
 
+        st.session_state[
+            "detected_language"
+        ] = detected_language
+
+        st.session_state[
+            "language_probability"
+        ] = language_probability
 
         st.session_state[
             "filename"
         ] = uploaded_file.name
 
-
-        st.session_state[
-            "detected_language"
-        ] = info.language
-
-
-        st.session_state[
-            "language_probability"
-        ] = info.language_probability
-
-
-        st.session_state[
-            "uncertain_count"
-        ] = len(
-            uncertain_segments
-        )
-
-
         st.success(
             "Transcription completed."
         )
-
-
-    except FileNotFoundError:
-
-        st.error(
-            "FFmpeg is not installed or cannot be found."
-        )
-
-        st.info(
-            "Install FFmpeg, restart PowerShell, "
-            "and run the application again."
-        )
-
 
     except Exception as error:
 
@@ -550,177 +319,65 @@ if st.button(
             "Transcription failed."
         )
 
-        st.exception(
-            error
-        )
+        st.exception(error)
 
-
-    finally:
-
-        # ----------------------------------------------------
-        # Delete temporary files
-        # ----------------------------------------------------
-
-        for filename in [
-            original_file,
-            wav_file
-        ]:
-
-            if filename:
-
-                try:
-
-                    os.remove(
-                        filename
-                    )
-
-                except Exception:
-
-                    pass
-
-
-# ============================================================
-# TRANSCRIPT
-# ============================================================
 
 if "transcript" in st.session_state:
 
     st.header("4. Transcript")
 
+    detected = st.session_state[
+        "detected_language"
+    ]
 
-    detected_language = (
-        st.session_state.get(
-            "detected_language",
-            "unknown"
-        )
-    )
-
-
-    language_probability = (
-        st.session_state.get(
-            "language_probability",
-            0
-        )
-    )
-
+    probability = st.session_state[
+        "language_probability"
+    ]
 
     st.info(
-        "Detected language: "
-        + str(detected_language)
-        + " | Confidence: "
-        + f"{language_probability:.0%}"
+        f"Detected language: {detected} | "
+        f"Confidence: {probability:.0%}"
     )
-
-
-    uncertain_count = (
-        st.session_state.get(
-            "uncertain_count",
-            0
-        )
-    )
-
-
-    if uncertain_count > 0:
-
-        st.warning(
-            f"{uncertain_count} segment(s) were "
-            "marked [uncertain]. Listen to those "
-            "sections in the original audio."
-        )
-
 
     transcript = st.text_area(
         "Transcribed text",
-        value=st.session_state[
-            "transcript"
-        ],
+        value=st.session_state["transcript"],
         height=550
     )
-
 
     st.session_state[
         "transcript"
     ] = transcript
 
-
-    # --------------------------------------------------------
-    # Statistics
-    # --------------------------------------------------------
-
     word_count = len(
         transcript.split()
     )
 
-
-    character_count = len(
-        transcript
-    )
-
-
     st.caption(
-        f"Words: {word_count} | "
-        f"Characters: {character_count}"
+        f"Words: {word_count}"
     )
-
-
-    # ========================================================
-    # DOWNLOAD
-    # ========================================================
-
-    st.header("5. Download")
-
 
     original_name = Path(
-        st.session_state[
-            "filename"
-        ]
+        st.session_state["filename"]
     ).stem
 
-
     output_name = (
-        original_name
-        + "_transcript.txt"
+        original_name +
+        "_transcript.txt"
     )
 
-
     st.download_button(
-
-        label="⬇️ Download TXT",
-
-        data=transcript.encode(
-            "utf-8"
-        ),
-
+        "⬇️ Download TXT",
+        data=transcript.encode("utf-8"),
         file_name=output_name,
-
         mime="text/plain;charset=utf-8",
-
         use_container_width=True
     )
 
+    st.divider()
 
-# ============================================================
-# INFORMATION
-# ============================================================
-
-st.divider()
-
-
-st.markdown(
-    """
-    <div class="warning-box">
-
-    <b>Transcription behavior</b><br><br>
-
-    This application attempts to reproduce the speech in the
-    recording. It does not intentionally translate, summarize,
-    correct grammar, or interpret the content.
-
-    Words that are genuinely unclear may be marked
-    <b>[uncertain]</b> rather than being silently presented
-    as certain.
-
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+    st.caption(
+        "The transcript attempts to preserve what was "
+        "spoken. It does not intentionally translate, "
+        "summarize, or medically interpret the recording."
+    )
