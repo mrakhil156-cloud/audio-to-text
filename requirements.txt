@@ -1,2 +1,2 @@
-﻿streamlit==1.48.2
-faster-whisper
+﻿streamlit==1.62.0
+faster-whisper==1.2.1
